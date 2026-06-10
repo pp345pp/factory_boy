@@ -538,3 +538,78 @@ class PostGenerationParsingTestCase(unittest.TestCase):
 
         self.assertIn('foo', TestObjectFactory._meta.post_declarations.as_dict())
         self.assertIn('foo__bar', TestObjectFactory._meta.post_declarations.as_dict())
+
+
+class CreateMethodTestCase(unittest.TestCase):
+
+    def test_default_create_method(self):
+        class TestFactory(base.Factory):
+            class Meta:
+                model = TestObject
+
+        self.assertEqual(TestFactory._meta.create_method, 'create')
+        obj = TestFactory.create(one=1)
+        self.assertIsInstance(obj, TestObject)
+        self.assertEqual(obj.one, 1)
+
+    def test_get_or_create_method(self):
+        _created = []
+        _get_or_create_called_with = []
+
+        class FakeObjects:
+            @staticmethod
+            def get_or_create(*args, **kwargs):
+                _get_or_create_called_with.append((args, kwargs))
+                instance = TestObject(**kwargs.get('defaults', {}))
+                _created.append(True)
+                return instance, True
+
+        class FakeModel:
+            objects = FakeObjects()
+
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        class TestFactory(base.Factory):
+            class Meta:
+                model = FakeModel
+                create_method = 'get_or_create'
+
+            one = 1
+
+        obj = TestFactory.create()
+        self.assertIsInstance(obj, FakeModel)
+        self.assertEqual(obj.one, 1)
+        self.assertTrue(_get_or_create_called_with)
+
+    def test_callable_create_method(self):
+        _create_called_with = []
+
+        def custom_create(**kwargs):
+            _create_called_with.append(kwargs)
+            return {'custom': True, 'data': kwargs}
+
+        class TestFactory(base.Factory):
+            class Meta:
+                model = dict
+                create_method = custom_create
+
+        obj = TestFactory.create(one=1, two=2)
+        self.assertEqual(obj, {'custom': True, 'data': {'one': 1, 'two': 2}})
+
+    def test_callable_create_method_with_function(self):
+        _create_called_with = []
+
+        def my_create(model_class, **kwargs):
+            _create_called_with.append(kwargs)
+            return model_class(**kwargs)
+
+        class TestFactory(base.Factory):
+            class Meta:
+                model = TestObject
+                create_method = my_create
+
+        obj = TestFactory.create(one=1)
+        self.assertIsInstance(obj, TestObject)
+        self.assertEqual(obj.one, 1)

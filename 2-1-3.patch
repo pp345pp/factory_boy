@@ -1,0 +1,116 @@
+diff --git a/factory/base.py b/factory/base.py
+index 454513b..9ff8f79 100644
+--- a/factory/base.py
++++ b/factory/base.py
+@@ -178,6 +178,7 @@ class FactoryOptions:
+             OptionDefault('inline_args', (), inherit=True),
+             OptionDefault('exclude', (), inherit=True),
+             OptionDefault('rename', {}, inherit=True),
++            OptionDefault('create_method', 'create', inherit=True),
+         ]
+ 
+     def _fill_from_meta(self, meta, base_meta):
+@@ -506,6 +507,11 @@ class BaseFactory(Generic[T]):
+             args (tuple): arguments to use when creating the class
+             kwargs (dict): keyword arguments to use when creating the class
+         """
++        create_method = cls._meta.create_method
++        if callable(create_method):
++            return create_method(*args, **kwargs)
++        elif create_method == 'get_or_create':
++            return model_class.objects.get_or_create(*args, **kwargs)[0]
+         return model_class(*args, **kwargs)
+ 
+     @classmethod
+@@ -647,6 +653,8 @@ class Factory(BaseFactory[T], metaclass=FactoryMetaClass):
+     functions.
+     """
+ 
++    __create_method__ = 'create'
++
+     # Backwards compatibility
+     AssociatedClassError: Type[Exception]
+ 
+diff --git a/tests/test_base.py b/tests/test_base.py
+index d3b3257..179f82a 100644
+--- a/tests/test_base.py
++++ b/tests/test_base.py
+@@ -538,3 +538,78 @@ class PostGenerationParsingTestCase(unittest.TestCase):
+ 
+         self.assertIn('foo', TestObjectFactory._meta.post_declarations.as_dict())
+         self.assertIn('foo__bar', TestObjectFactory._meta.post_declarations.as_dict())
++
++
++class CreateMethodTestCase(unittest.TestCase):
++
++    def test_default_create_method(self):
++        class TestFactory(base.Factory):
++            class Meta:
++                model = TestObject
++
++        self.assertEqual(TestFactory._meta.create_method, 'create')
++        obj = TestFactory.create(one=1)
++        self.assertIsInstance(obj, TestObject)
++        self.assertEqual(obj.one, 1)
++
++    def test_get_or_create_method(self):
++        _created = []
++        _get_or_create_called_with = []
++
++        class FakeObjects:
++            @staticmethod
++            def get_or_create(*args, **kwargs):
++                _get_or_create_called_with.append((args, kwargs))
++                instance = TestObject(**kwargs.get('defaults', {}))
++                _created.append(True)
++                return instance, True
++
++        class FakeModel:
++            objects = FakeObjects()
++
++            def __init__(self, **kwargs):
++                for k, v in kwargs.items():
++                    setattr(self, k, v)
++
++        class TestFactory(base.Factory):
++            class Meta:
++                model = FakeModel
++                create_method = 'get_or_create'
++
++            one = 1
++
++        obj = TestFactory.create()
++        self.assertIsInstance(obj, FakeModel)
++        self.assertEqual(obj.one, 1)
++        self.assertTrue(_get_or_create_called_with)
++
++    def test_callable_create_method(self):
++        _create_called_with = []
++
++        def custom_create(**kwargs):
++            _create_called_with.append(kwargs)
++            return {'custom': True, 'data': kwargs}
++
++        class TestFactory(base.Factory):
++            class Meta:
++                model = dict
++                create_method = custom_create
++
++        obj = TestFactory.create(one=1, two=2)
++        self.assertEqual(obj, {'custom': True, 'data': {'one': 1, 'two': 2}})
++
++    def test_callable_create_method_with_function(self):
++        _create_called_with = []
++
++        def my_create(model_class, **kwargs):
++            _create_called_with.append(kwargs)
++            return model_class(**kwargs)
++
++        class TestFactory(base.Factory):
++            class Meta:
++                model = TestObject
++                create_method = my_create
++
++        obj = TestFactory.create(one=1)
++        self.assertIsInstance(obj, TestObject)
++        self.assertEqual(obj.one, 1)

@@ -178,6 +178,7 @@ class FactoryOptions:
             OptionDefault('inline_args', (), inherit=True),
             OptionDefault('exclude', (), inherit=True),
             OptionDefault('rename', {}, inherit=True),
+            OptionDefault('create_method', 'create', inherit=True),
         ]
 
     def _fill_from_meta(self, meta, base_meta):
@@ -506,6 +507,11 @@ class BaseFactory(Generic[T]):
             args (tuple): arguments to use when creating the class
             kwargs (dict): keyword arguments to use when creating the class
         """
+        create_method = cls._meta.create_method
+        if callable(create_method):
+            return create_method(*args, **kwargs)
+        elif create_method == 'get_or_create':
+            return model_class.objects.get_or_create(*args, **kwargs)[0]
         return model_class(*args, **kwargs)
 
     @classmethod
@@ -646,6 +652,8 @@ class Factory(BaseFactory[T], metaclass=FactoryMetaClass):
     This class has the ability to support multiple ORMs by using custom creation
     functions.
     """
+
+    __create_method__ = 'create'
 
     # Backwards compatibility
     AssociatedClassError: Type[Exception]

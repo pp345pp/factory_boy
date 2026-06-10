@@ -171,6 +171,12 @@ class FactoryOptions:
                     % (repr(value), Factory.__name__)
                 )
 
+        def is_create_method(meta, value):
+            if value is not None and not callable(value) and value not in ('create', 'get_or_create'):
+                raise TypeError(
+                    "Meta.create_method must be 'create', 'get_or_create', or a callable; "
+                    "got %r" % (value,))
+
         return [
             OptionDefault('model', None, inherit=True, checker=is_model),
             OptionDefault('abstract', False, inherit=False),
@@ -178,6 +184,7 @@ class FactoryOptions:
             OptionDefault('inline_args', (), inherit=True),
             OptionDefault('exclude', (), inherit=True),
             OptionDefault('rename', {}, inherit=True),
+            OptionDefault('create_method', None, inherit=True, checker=is_create_method),
         ]
 
     def _fill_from_meta(self, meta, base_meta):
@@ -650,8 +657,52 @@ class Factory(BaseFactory[T], metaclass=FactoryMetaClass):
     # Backwards compatibility
     AssociatedClassError: Type[Exception]
 
+    # Default creation method. Can be overridden in subclasses or via
+    # Meta.create_method. Supported values: None (default), 'create',
+    # 'get_or_create', or a callable.
+    __create_method__ = None
+
     class Meta(BaseMeta):
         pass
+
+    @classmethod
+    def _create(cls, model_class, *args, **kwargs):
+        """Actually create an instance of the model_class.
+
+        Supports pluggable creation methods via ``Meta.create_method`` or
+        ``cls.__create_method__``.
+
+        - ``'create'``: call ``model_class.objects.create(**kwargs)``
+        - ``'get_or_create'``: call ``model_class.objects.get_or_create(**kwargs)``,
+          returning the first element of the resulting tuple
+        - callable: invoke it directly with the given args and kwargs
+        - ``None`` (default): fall back to ``model_class(*args, **kwargs)``
+        """
+        create_method = getattr(cls._meta, 'create_method', None) or cls.__create_method__
+        if create_method is None:
+            return super()._create(model_class, *args, **kwargs)
+        elif callable(create_method):
+            return create_method(*args, **kwargs)
+        elif create_method == 'create':
+            manager = getattr(model_class, 'objects', None)
+            if manager is None:
+                raise errors.FactoryError(
+                    "Model class %r has no 'objects' manager; cannot use "
+                    "create_method='create'" % model_class)
+            return manager.create(*args, **kwargs)
+        elif create_method == 'get_or_create':
+            manager = getattr(model_class, 'objects', None)
+            if manager is None:
+                raise errors.FactoryError(
+                    "Model class %r has no 'objects' manager; cannot use "
+                    "create_method='get_or_create'" % model_class)
+            result = manager.get_or_create(*args, **kwargs)
+            if isinstance(result, tuple):
+                return result[0]
+            return result
+        else:
+            raise errors.FactoryError(
+                "Unsupported create_method %r on factory %s" % (create_method, cls.__name__))
 
 
 # Add the association after metaclass execution.

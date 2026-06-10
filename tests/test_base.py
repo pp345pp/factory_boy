@@ -538,3 +538,162 @@ class PostGenerationParsingTestCase(unittest.TestCase):
 
         self.assertIn('foo', TestObjectFactory._meta.post_declarations.as_dict())
         self.assertIn('foo__bar', TestObjectFactory._meta.post_declarations.as_dict())
+
+
+class _Manager:
+    """Fake manager supporting ``create`` and ``get_or_create``."""
+
+    def __init__(self, model_cls):
+        self.model_cls = model_cls
+        self.instances = []
+
+    def create(self, **kwargs):
+        instance = self.model_cls(**kwargs)
+        instance.id = len(self.instances) + 1
+        self.instances.append(instance)
+        return instance
+
+    def get_or_create(self, **kwargs):
+        for instance in self.instances:
+            if all(getattr(instance, k, None) == v for k, v in kwargs.items()):
+                return instance, False
+        instance = self.create(**kwargs)
+        return instance, True
+
+
+class _ModelWithManager:
+    objects = None  # replaced in tests
+
+    def __init__(self, **kwargs):
+        for name, value in kwargs.items():
+            setattr(self, name, value)
+        self.id = None
+
+
+class CreateMethodTestCase(unittest.TestCase):
+
+    def _make_factory_class(self, create_method=None, class_attr=None):
+        """Build a factory class with a fresh manager."""
+        class Model(_ModelWithManager):
+            pass
+
+        Model.objects = _Manager(Model)
+
+        attrs = {'model': Model}
+        if create_method is not None:
+            attrs['create_method'] = create_method
+        meta = type('Meta', (), attrs)
+
+        body = {'Meta': meta}
+        if class_attr is not None:
+            body['__create_method__'] = class_attr
+        return type('ModelFactory', (base.Factory,), body), Model
+
+    def test_default_create_method(self):
+        """Unset Meta.create_method preserves the existing behavior."""
+
+        class Factory(base.Factory):
+            class Meta:
+                model = TestObject
+            one = 'one'
+
+        obj = Factory.create()
+        self.assertIsInstance(obj, TestObject)
+        self.assertEqual('one', obj.one)
+        # Default behavior should not require an ``objects`` manager.
+        self.assertIsNone(Factory._meta.create_method)
+        self.assertIsNone(Factory.__create_method__)
+
+    def test_create_method_create_string(self):
+        """create_method='create' dispatches to model.objects.create."""
+        FactoryCls, Model = self._make_factory_class(create_method='create')
+        obj = FactoryCls.create(one='one')
+        self.assertIsInstance(obj, Model)
+        self.assertEqual('one', obj.one)
+        self.assertEqual(1, obj.id)
+        self.assertEqual(1, len(Model.objects.instances))
+
+    def test_create_method_get_or_create_string(self):
+        """create_method='get_or_create' returns the first tuple element."""
+        FactoryCls, Model = self._make_factory_class(create_method='get_or_create')
+        obj1 = FactoryCls.create(one='one')
+        obj2 = FactoryCls.create(one='one')
+        self.assertIs(obj1, obj2)
+        self.assertEqual(1, len(Model.objects.instances))
+        self.assertEqual(1, obj1.id)
+
+    def test_create_method_callable(self):
+        """A callable create_method is invoked directly."""
+        calls = []
+
+        def custom_create(**kwargs):
+            calls.append(kwargs)
+            instance = _ModelWithManager(**kwargs)
+            instance.id = 'callable'
+            return instance
+
+        class Model(_ModelWithManager):
+            pass
+
+        class Factory(base.Factory):
+            class Meta:
+                model = Model
+                create_method = staticmethod(custom_create)  # noqa: F821
+
+        obj = Factory.create(one='one')
+        self.assertEqual([{'one': 'one'}], calls)
+        self.assertEqual('callable', obj.id)
+
+    def test_class_attribute_fallback(self):
+        """Setting ``__create_method__`` on the class is honored."""
+        FactoryCls, Model = self._make_factory_class(class_attr='create')
+        obj = FactoryCls.create(one='one')
+        self.assertIsInstance(obj, Model)
+        self.assertEqual(1, obj.id)
+
+    def test_meta_create_method_overrides_class_attribute(self):
+        """Meta.create_method takes precedence over __create_method__."""
+        class Model(_ModelWithManager):
+            pass
+        Model.objects = _Manager(Model)
+
+        class Factory(base.Factory):
+            __create_method__ = 'create'
+
+            class Meta:
+                model = Model
+                create_method = 'get_or_create'
+
+        obj1 = Factory.create(one='one')
+        obj2 = Factory.create(one='one')
+        self.assertIs(obj1, obj2)
+        self.assertEqual(1, len(Model.objects.instances))
+
+    def test_invalid_create_method_raises_at_declaration(self):
+        """Invalid values for Meta.create_method are detected early."""
+        with self.assertRaises(TypeError):
+            class _BadFactory(base.Factory):
+                class Meta:
+                    model = TestObject
+                    create_method = 'bogus'
+
+    def test_invalid_manager_raises_at_runtime(self):
+        """Using a model without an 'objects' manager raises FactoryError."""
+
+        class NoManager:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        class Factory(base.Factory):
+            class Meta:
+                model = NoManager
+                create_method = 'create'
+
+        with self.assertRaises(errors.FactoryError):
+            Factory.create()
+
+
+if __name__ == '__main__':
+    unittest.main()
+

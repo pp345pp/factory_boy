@@ -178,6 +178,7 @@ class FactoryOptions:
             OptionDefault('inline_args', (), inherit=True),
             OptionDefault('exclude', (), inherit=True),
             OptionDefault('rename', {}, inherit=True),
+            OptionDefault('create_method', 'create', inherit=True),
         ]
 
     def _fill_from_meta(self, meta, base_meta):
@@ -650,8 +651,20 @@ class Factory(BaseFactory[T], metaclass=FactoryMetaClass):
     # Backwards compatibility
     AssociatedClassError: Type[Exception]
 
+    __create_method__ = 'create'
+
     class Meta(BaseMeta):
         pass
+
+    @classmethod
+    def _create(cls, model_class, *args, **kwargs):
+        create_method = getattr(cls._meta, 'create_method', cls.__create_method__)
+        if create_method == 'get_or_create':
+            return model_class.objects.get_or_create(**kwargs)[0]
+        elif callable(create_method):
+            return create_method(**kwargs)
+        else:
+            return super()._create(model_class, *args, **kwargs)
 
 
 # Add the association after metaclass execution.

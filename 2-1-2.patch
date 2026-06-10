@@ -1,0 +1,90 @@
+diff --git a/factory/base.py b/factory/base.py
+index 454513b..a9a5e97 100644
+--- a/factory/base.py
++++ b/factory/base.py
+@@ -178,6 +178,7 @@ class FactoryOptions:
+             OptionDefault('inline_args', (), inherit=True),
+             OptionDefault('exclude', (), inherit=True),
+             OptionDefault('rename', {}, inherit=True),
++            OptionDefault('create_method', 'create', inherit=True),
+         ]
+ 
+     def _fill_from_meta(self, meta, base_meta):
+@@ -650,9 +651,21 @@ class Factory(BaseFactory[T], metaclass=FactoryMetaClass):
+     # Backwards compatibility
+     AssociatedClassError: Type[Exception]
+ 
++    __create_method__ = 'create'
++
+     class Meta(BaseMeta):
+         pass
+ 
++    @classmethod
++    def _create(cls, model_class, *args, **kwargs):
++        create_method = getattr(cls._meta, 'create_method', cls.__create_method__)
++        if create_method == 'get_or_create':
++            return model_class.objects.get_or_create(**kwargs)[0]
++        elif callable(create_method):
++            return create_method(**kwargs)
++        else:
++            return super()._create(model_class, *args, **kwargs)
++
+ 
+ # Add the association after metaclass execution.
+ # Otherwise, AssociatedClassError would be detected as a declaration.
+diff --git a/tests/test_base.py b/tests/test_base.py
+index d3b3257..5b1f32e 100644
+--- a/tests/test_base.py
++++ b/tests/test_base.py
+@@ -538,3 +538,51 @@ class PostGenerationParsingTestCase(unittest.TestCase):
+ 
+         self.assertIn('foo', TestObjectFactory._meta.post_declarations.as_dict())
+         self.assertIn('foo__bar', TestObjectFactory._meta.post_declarations.as_dict())
++
++
++class CreateMethodTestCase(unittest.TestCase):
++    def test_default_create(self):
++        class DummyModel:
++            def __init__(self, **kwargs):
++                self.kwargs = kwargs
++
++        class DummyFactory(base.Factory):
++            class Meta:
++                model = DummyModel
++                # create_method defaults to 'create'
++
++        obj = DummyFactory(a=1, b=2)
++        self.assertEqual(obj.kwargs, {'a': 1, 'b': 2})
++
++    def test_get_or_create(self):
++        class DummyManager:
++            def get_or_create(self, **kwargs):
++                self.kwargs = kwargs
++                return ('created_obj', True)
++
++        class DummyModel:
++            objects = DummyManager()
++
++        class DummyFactory(base.Factory):
++            class Meta:
++                model = DummyModel
++                create_method = 'get_or_create'
++
++        obj = DummyFactory(a=1, b=2)
++        self.assertEqual(obj, 'created_obj')
++        self.assertEqual(DummyModel.objects.kwargs, {'a': 1, 'b': 2})
++
++    def test_callable(self):
++        def my_create_method(**kwargs):
++            return f"called_with_{kwargs['a']}"
++
++        class DummyModel:
++            pass
++
++        class DummyFactory(base.Factory):
++            class Meta:
++                model = DummyModel
++                create_method = my_create_method
++
++        obj = DummyFactory(a=42)
++        self.assertEqual(obj, 'called_with_42')

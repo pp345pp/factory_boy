@@ -538,3 +538,51 @@ class PostGenerationParsingTestCase(unittest.TestCase):
 
         self.assertIn('foo', TestObjectFactory._meta.post_declarations.as_dict())
         self.assertIn('foo__bar', TestObjectFactory._meta.post_declarations.as_dict())
+
+
+class CreateMethodTestCase(unittest.TestCase):
+    def test_default_create(self):
+        class DummyModel:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class DummyFactory(base.Factory):
+            class Meta:
+                model = DummyModel
+                # create_method defaults to 'create'
+
+        obj = DummyFactory(a=1, b=2)
+        self.assertEqual(obj.kwargs, {'a': 1, 'b': 2})
+
+    def test_get_or_create(self):
+        class DummyManager:
+            def get_or_create(self, **kwargs):
+                self.kwargs = kwargs
+                return ('created_obj', True)
+
+        class DummyModel:
+            objects = DummyManager()
+
+        class DummyFactory(base.Factory):
+            class Meta:
+                model = DummyModel
+                create_method = 'get_or_create'
+
+        obj = DummyFactory(a=1, b=2)
+        self.assertEqual(obj, 'created_obj')
+        self.assertEqual(DummyModel.objects.kwargs, {'a': 1, 'b': 2})
+
+    def test_callable(self):
+        def my_create_method(**kwargs):
+            return f"called_with_{kwargs['a']}"
+
+        class DummyModel:
+            pass
+
+        class DummyFactory(base.Factory):
+            class Meta:
+                model = DummyModel
+                create_method = my_create_method
+
+        obj = DummyFactory(a=42)
+        self.assertEqual(obj, 'called_with_42')

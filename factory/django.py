@@ -60,8 +60,6 @@ class DjangoOptions(base.FactoryOptions):
                 and self.base_factory._meta.model._meta.abstract
                 and self.model is not None
                 and not self.model._meta.abstract):
-            # Target factory is for an abstract model, yet we're for another,
-            # concrete subclass => don't reuse the counter.
             return self.factory
         return counter_reference
 
@@ -86,7 +84,7 @@ class DjangoModelFactory(base.Factory[T]):
     _original_params = None
 
     class Meta:
-        abstract = True  # Optional, but explicit.
+        abstract = True
 
     @classmethod
     def _load_model_class(cls, definition):
@@ -106,8 +104,6 @@ class DjangoModelFactory(base.Factory[T]):
         try:
             manager = model_class.objects
         except AttributeError:
-            # When inheriting from an abstract model with a custom
-            # manager, the class has no 'objects' field.
             manager = model_class._default_manager
 
         if cls._meta.database != DEFAULT_DB_ALIAS:
@@ -116,8 +112,6 @@ class DjangoModelFactory(base.Factory[T]):
 
     @classmethod
     def _generate(cls, strategy, params):
-        # Original params are used in _get_or_create if it cannot build an
-        # object initially due to an IntegrityError being raised
         cls._original_params = params
         return super()._generate(strategy, params)
 
@@ -157,8 +151,6 @@ class DjangoModelFactory(base.Factory[T]):
                 try:
                     instance = manager.get(**get_or_create_params)
                 except manager.model.DoesNotExist:
-                    # Original params are not a valid lookup and triggered a create(),
-                    # that resulted in an IntegrityError. Follow Django’s behavior.
                     raise e
             else:
                 raise e
@@ -172,9 +164,8 @@ class DjangoModelFactory(base.Factory[T]):
             return cls._get_or_create(model_class, *args, **kwargs)
 
         manager = cls._get_manager(model_class)
-        return manager.create(*args, **kwargs)
+        return cls._call_create(model_class, *args, create_target=manager, **kwargs)
 
-    # DEPRECATED. Remove this override with the next major release.
     @classmethod
     def _after_postgeneration(cls, instance, create, results=None):
         """Save again the instance if creating and at least one hook ran."""
@@ -188,7 +179,6 @@ class DjangoModelFactory(base.Factory[T]):
                 "postgeneration hooks or override _after_postgeneration.",
                 DeprecationWarning,
             )
-            # Some post-generation hooks ran, and may have modified us.
             instance.save()
 
 
@@ -256,8 +246,6 @@ class ImageField(FileField):
     DEFAULT_FILENAME = 'example.jpg'
 
     def _make_data(self, params):
-        # ImageField (both django's and factory_boy's) require PIL.
-        # Try to import it along one of its known installation paths.
         from PIL import Image
 
         width = params.get('width', 100)
@@ -301,9 +289,6 @@ class mute_signals:
             logger.debug('mute_signals: Disabling signal handlers %r',
                          signal.receivers)
 
-            # Note that we're using implementation details of
-            # django.signals, since arguments to signal.connect()
-            # are lost in signal.receivers
             self.paused[signal] = signal.receivers
             signal.receivers = []
 
@@ -314,9 +299,6 @@ class mute_signals:
 
             signal.receivers = receivers + signal.receivers
             with signal.lock:
-                # Django uses some caching for its signals.
-                # Since we're bypassing signal.connect and signal.disconnect,
-                # we have to keep messing with django's internals.
                 signal.sender_receivers_cache.clear()
         self.paused = {}
 
@@ -325,7 +307,6 @@ class mute_signals:
 
     def __call__(self, callable_obj):
         if isinstance(callable_obj, base.FactoryMetaClass):
-            # Retrieve __func__, the *actual* callable object.
             callable_obj._create = self.wrap_method(callable_obj._create.__func__)
             callable_obj._generate = self.wrap_method(callable_obj._generate.__func__)
             callable_obj._after_postgeneration = self.wrap_method(
@@ -336,7 +317,6 @@ class mute_signals:
         else:
             @functools.wraps(callable_obj)
             def wrapper(*args, **kwargs):
-                # A mute_signals() object is not reentrant; use a copy every time.
                 with self.copy():
                     return callable_obj(*args, **kwargs)
             return wrapper
@@ -345,7 +325,6 @@ class mute_signals:
         @classmethod
         @functools.wraps(method)
         def wrapped_method(*args, **kwargs):
-            # A mute_signals() object is not reentrant; use a copy every time.
             with self.copy():
                 return method(*args, **kwargs)
         return wrapped_method

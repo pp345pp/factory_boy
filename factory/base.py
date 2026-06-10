@@ -171,6 +171,12 @@ class FactoryOptions:
                     % (repr(value), Factory.__name__)
                 )
 
+        def is_create_method(meta, value):
+            if value not in ('create', 'get_or_create') and not callable(value):
+                raise TypeError(
+                    "Meta.create_method must be 'create', 'get_or_create', or a callable"
+                )
+
         return [
             OptionDefault('model', None, inherit=True, checker=is_model),
             OptionDefault('abstract', False, inherit=False),
@@ -178,6 +184,7 @@ class FactoryOptions:
             OptionDefault('inline_args', (), inherit=True),
             OptionDefault('exclude', (), inherit=True),
             OptionDefault('rename', {}, inherit=True),
+            OptionDefault('create_method', 'create', inherit=True, checker=is_create_method),
         ]
 
     def _fill_from_meta(self, meta, base_meta):
@@ -209,6 +216,7 @@ class FactoryOptions:
         self.base_factory = base_factory
 
         self._fill_from_meta(meta=meta, base_meta=base_meta)
+        self.factory.__create_method__ = self.create_method
 
         self.model = self.get_model_class()
         if self.model is None:
@@ -647,11 +655,39 @@ class Factory(BaseFactory[T], metaclass=FactoryMetaClass):
     functions.
     """
 
+    __create_method__ = 'create'
+
     # Backwards compatibility
     AssociatedClassError: Type[Exception]
 
     class Meta(BaseMeta):
         pass
+
+    @classmethod
+    def _get_create_target(cls, model_class):
+        return getattr(model_class, 'objects', None)
+
+    @classmethod
+    def _call_create(cls, model_class, *args, create_target=None, **kwargs):
+        create_method = cls.__create_method__
+
+        if callable(create_method):
+            return create_method(*args, **kwargs)
+
+        if create_target is None:
+            create_target = cls._get_create_target(model_class)
+
+        if create_method == 'get_or_create':
+            instance, _created = create_target.get_or_create(*args, **kwargs)
+            return instance
+
+        if create_target is None:
+            return model_class(*args, **kwargs)
+        return create_target.create(*args, **kwargs)
+
+    @classmethod
+    def _create(cls, model_class, *args, **kwargs):
+        return cls._call_create(model_class, *args, **kwargs)
 
 
 # Add the association after metaclass execution.

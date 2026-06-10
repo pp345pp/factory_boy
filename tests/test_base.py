@@ -538,3 +538,177 @@ class PostGenerationParsingTestCase(unittest.TestCase):
 
         self.assertIn('foo', TestObjectFactory._meta.post_declarations.as_dict())
         self.assertIn('foo__bar', TestObjectFactory._meta.post_declarations.as_dict())
+
+
+class FakeORMModel:
+    """A fake model simulating an ORM with objects.create and objects.get_or_create."""
+
+    class objects:
+        _store = []
+
+        @classmethod
+        def create(cls, **kwargs):
+            instance = FakeORMModel(**kwargs)
+            instance.id = len(cls._store) + 1
+            cls._store.append(instance)
+            return instance
+
+        @classmethod
+        def get_or_create(cls, **kwargs):
+            defaults = kwargs.pop('defaults', {})
+            for existing in cls._store:
+                match = all(getattr(existing, k, None) == v for k, v in kwargs.items())
+                if match:
+                    return existing, False
+            combined = {**kwargs, **defaults}
+            instance = FakeORMModel(**combined)
+            instance.id = len(cls._store) + 1
+            cls._store.append(instance)
+            return instance, True
+
+    def __init__(self, **kwargs):
+        for name, value in kwargs.items():
+            setattr(self, name, value)
+        self.id = None
+
+    @classmethod
+    def reset_store(cls):
+        cls.objects._store = []
+
+
+class CreateMethodTestCase(unittest.TestCase):
+    def setUp(self):
+        FakeORMModel.reset_store()
+
+    def test_default_create_method_backward_compat(self):
+        """When create_method is not set, _create uses model_class(*args, **kwargs)."""
+
+        class SimpleModel:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        class SimpleFactory(base.Factory):
+            class Meta:
+                model = SimpleModel
+
+        obj = SimpleFactory.create(name='test')
+        self.assertIsInstance(obj, SimpleModel)
+        self.assertEqual(obj.name, 'test')
+
+    def test_create_method_create(self):
+        """When create_method='create', _create uses model_class.objects.create(**kwargs)."""
+
+        class ORMFactory(base.Factory):
+            class Meta:
+                model = FakeORMModel
+                create_method = 'create'
+
+            name = 'default_name'
+
+        obj = ORMFactory.create(name='alice')
+        self.assertIsInstance(obj, FakeORMModel)
+        self.assertEqual(obj.name, 'alice')
+        self.assertIsNotNone(obj.id)
+
+    def test_create_method_get_or_create(self):
+        """When create_method='get_or_create', _create uses model_class.objects.get_or_create(**kwargs)."""
+
+        class GetOrCreateFactory(base.Factory):
+            class Meta:
+                model = FakeORMModel
+                create_method = 'get_or_create'
+
+            name = 'bob'
+
+        obj1 = GetOrCreateFactory.create(name='bob')
+        self.assertIsInstance(obj1, FakeORMModel)
+        self.assertEqual(obj1.name, 'bob')
+        self.assertIsNotNone(obj1.id)
+
+        obj2 = GetOrCreateFactory.create(name='bob')
+        self.assertIs(obj1, obj2)
+
+    def test_create_method_callable(self):
+        """When create_method is a callable, _create calls it with **kwargs."""
+        call_log = []
+
+        def custom_creator(**kwargs):
+            call_log.append(kwargs)
+            instance = FakeORMModel(**kwargs)
+            instance.id = 999
+            return instance
+
+        class CallableFactory(base.Factory):
+            class Meta:
+                model = FakeORMModel
+                create_method = custom_creator
+
+            name = 'callable_test'
+
+        obj = CallableFactory.create(name='from_callable')
+        self.assertIsInstance(obj, FakeORMModel)
+        self.assertEqual(obj.name, 'from_callable')
+        self.assertEqual(obj.id, 999)
+        self.assertEqual(call_log, [{'name': 'from_callable'}])
+
+    def test_create_method_inherits_from_parent(self):
+        """create_method should be inherited from parent factory."""
+
+        class ParentFactory(base.Factory):
+            class Meta:
+                model = FakeORMModel
+                create_method = 'create'
+
+            name = 'parent'
+
+        class ChildFactory(ParentFactory):
+            pass
+
+        self.assertEqual(ChildFactory._meta.create_method, 'create')
+        obj = ChildFactory.create(name='child')
+        self.assertIsInstance(obj, FakeORMModel)
+        self.assertEqual(obj.name, 'child')
+        self.assertIsNotNone(obj.id)
+
+    def test_create_method_invalid_value_raises(self):
+        """Setting create_method to an invalid value should raise TypeError."""
+
+        with self.assertRaises(TypeError):
+            class BadFactory(base.Factory):
+                class Meta:
+                    model = FakeORMModel
+                    create_method = 'invalid_method'
+
+    def test_dunder_create_method_class_attribute(self):
+        """__create_method__ class attribute serves as fallback when Meta.create_method is not set."""
+
+        class DunderFactory(base.Factory):
+            __create_method__ = 'create'
+
+            class Meta:
+                model = FakeORMModel
+
+            name = 'dunder_test'
+
+        obj = DunderFactory.create(name='via_dunder')
+        self.assertIsInstance(obj, FakeORMModel)
+        self.assertEqual(obj.name, 'via_dunder')
+        self.assertIsNotNone(obj.id)
+
+    def test_meta_create_method_overrides_dunder(self):
+        """Meta.create_method should take precedence over __create_method__."""
+
+        class OverrideFactory(base.Factory):
+            __create_method__ = 'create'
+
+            class Meta:
+                model = FakeORMModel
+                create_method = 'get_or_create'
+
+            name = 'override_test'
+
+        self.assertEqual(OverrideFactory._meta.create_method, 'get_or_create')
+        obj = OverrideFactory.create(name='override')
+        self.assertIsInstance(obj, FakeORMModel)
+        self.assertEqual(obj.name, 'override')

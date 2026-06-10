@@ -171,6 +171,17 @@ class FactoryOptions:
                     % (repr(value), Factory.__name__)
                 )
 
+        def is_create_method(meta, value):
+            if value is None:
+                return
+            if isinstance(value, str) and value in ('create', 'get_or_create'):
+                return
+            if callable(value):
+                return
+            raise TypeError(
+                "create_method must be 'create', 'get_or_create', or a callable, got %r"
+                % (value,))
+
         return [
             OptionDefault('model', None, inherit=True, checker=is_model),
             OptionDefault('abstract', False, inherit=False),
@@ -178,6 +189,7 @@ class FactoryOptions:
             OptionDefault('inline_args', (), inherit=True),
             OptionDefault('exclude', (), inherit=True),
             OptionDefault('rename', {}, inherit=True),
+            OptionDefault('create_method', None, inherit=True, checker=is_create_method),
         ]
 
     def _fill_from_meta(self, meta, base_meta):
@@ -647,11 +659,32 @@ class Factory(BaseFactory[T], metaclass=FactoryMetaClass):
     functions.
     """
 
+    __create_method__ = None
+
     # Backwards compatibility
     AssociatedClassError: Type[Exception]
 
     class Meta(BaseMeta):
         pass
+
+    @classmethod
+    def _create(cls, model_class, *args, **kwargs):
+        create_method = cls._meta.create_method
+        if create_method is None:
+            create_method = cls.__create_method__
+
+        if create_method is None:
+            return model_class(*args, **kwargs)
+        elif create_method == 'create':
+            return model_class.objects.create(**kwargs)
+        elif create_method == 'get_or_create':
+            instance, _ = model_class.objects.get_or_create(**kwargs)
+            return instance
+        elif callable(create_method):
+            return create_method(**kwargs)
+        else:
+            raise errors.FactoryError(
+                "Unknown create_method %r on %r" % (create_method, cls))
 
 
 # Add the association after metaclass execution.

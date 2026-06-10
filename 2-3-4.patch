@@ -1,1 +1,98 @@
-null
+diff --git a/.github/workflows/test.yml b/.github/workflows/test.yml
+index fa32c9b..f44f978 100644
+--- a/.github/workflows/test.yml
++++ b/.github/workflows/test.yml
+@@ -41,3 +41,86 @@ jobs:
+ 
+       - name: Run tests
+         run: tox
++
++  test-examples:
++    name: Test examples / ${{ matrix.example }}
++    runs-on: ubuntu-latest
++    if: always()
++    needs: tests
++
++    strategy:
++      fail-fast: false
++      matrix:
++        example:
++          - django_demo
++          - flask_alchemy
++        python-version:
++          - "3.11"
++
++    steps:
++      - uses: actions/checkout@v5
++
++      - name: Set up Python ${{ matrix.python-version }}
++        uses: actions/setup-python@v6
++        with:
++          python-version: ${{ matrix.python-version }}
++          cache: pip
++          cache-dependency-path: examples/${{ matrix.example }}/requirements.txt
++
++      - name: Detect tests
++        id: detect
++        run: |
++          EXAMPLE_DIR="examples/${{ matrix.example }}"
++          if [ ! -d "$EXAMPLE_DIR" ]; then
++            echo "has_tests=false" >> "$GITHUB_OUTPUT"
++            echo "Example directory $EXAMPLE_DIR not found, skipping."
++            exit 0
++          fi
++          case "${{ matrix.example }}" in
++            django_demo)
++              if find "$EXAMPLE_DIR" -name "tests.py" -o -name "tests" -type d -o -name "test_*.py" | grep -q .; then
++                echo "has_tests=true" >> "$GITHUB_OUTPUT"
++              else
++                echo "has_tests=false" >> "$GITHUB_OUTPUT"
++              fi
++              ;;
++            flask_alchemy)
++              if [ -d "$EXAMPLE_DIR/tests" ] || find "$EXAMPLE_DIR" -maxdepth 1 -name "test_*.py" | grep -q .; then
++                echo "has_tests=true" >> "$GITHUB_OUTPUT"
++              else
++                echo "has_tests=false" >> "$GITHUB_OUTPUT"
++              fi
++              ;;
++            *)
++              echo "has_tests=false" >> "$GITHUB_OUTPUT"
++              ;;
++          esac
++
++      - name: Install dependencies (django_demo)
++        if: steps.detect.outputs.has_tests == 'true' && matrix.example == 'django_demo'
++        working-directory: examples/${{ matrix.example }}
++        run: python -m pip install "Django>=4.2"
++
++      - name: Install dependencies (flask_alchemy)
++        if: steps.detect.outputs.has_tests == 'true' && matrix.example == 'flask_alchemy'
++        working-directory: examples/${{ matrix.example }}
++        run: python -m pip install Flask Flask-SQLAlchemy pytest
++
++      - name: Run tests (django_demo)
++        if: steps.detect.outputs.has_tests == 'true' && matrix.example == 'django_demo'
++        working-directory: examples/${{ matrix.example }}
++        run: python manage.py test
++
++      - name: Run tests (flask_alchemy)
++        if: steps.detect.outputs.has_tests == 'true' && matrix.example == 'flask_alchemy'
++        working-directory: examples/${{ matrix.example }}
++        run: |
++          if [ -d tests ]; then
++            pytest tests/
++          else
++            pytest
++          fi
++
++      - name: Skip (no tests found)
++        if: steps.detect.outputs.has_tests != 'true'
++        run: echo "No tests detected for example ${{ matrix.example }}; skipping."
+diff --git a/2-3-4.patch b/2-3-4.patch
+index ec747fa..e69de29 100644
+--- a/2-3-4.patch
++++ b/2-3-4.patch
+@@ -1 +0,0 @@
+-null
+\ No newline at end of file
